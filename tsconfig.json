@@ -1,9 +1,9 @@
 {
   "include": ["src/**/*", "version-bump.ts"],
   "compilerOptions": {
-    "target": "esnext",
-    "lib": ["esnext", "DOM"],
-    "module": "esnext",
+    "target": "ESNext",
+    "lib": ["DOM", "ESNext"],
+    "module": "ESNext",
     "moduleResolution": "bundler",
     "noEmit": true,
     "strict": true,
