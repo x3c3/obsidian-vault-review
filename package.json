@@ -1,24 +1,23 @@
 {
-	"name": "vault-review",
-	"version": "1.0.2",
-	"description": "Randomly review your vault and track progress.",
-	"main": "main.js",
-	"scripts": {
-		"dev": "node esbuild.config.mjs",
-		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-		"version": "node version-bump.mjs && git add manifest.json versions.json"
-	},
-	"keywords": [],
-	"author": "Alexander",
-	"license": "MIT",
-	"devDependencies": {
-		"@types/node": "^16.11.6",
-		"@typescript-eslint/eslint-plugin": "5.29.0",
-		"@typescript-eslint/parser": "5.29.0",
-		"builtin-modules": "3.3.0",
-		"esbuild": "0.17.3",
-		"obsidian": "latest",
-		"tslib": "2.4.0",
-		"typescript": "4.7.4"
-	}
+  "name": "vault-review",
+  "version": "1.0.2",
+  "description": "Randomly review your vault and track progress",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "bun build src/main.ts --outfile dist/main.js --format cjs --external obsidian --watch",
+    "build": "bun run check && bun build src/main.ts --outfile dist/main.js --format cjs --external obsidian",
+    "check": "biome check src/",
+    "lint": "biome check src/",
+    "lint:fix": "biome check --write src/",
+    "format": "biome format --write src/",
+    "format:check": "biome format src/",
+    "version": "bun run version-bump.ts"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.3",
+    "@types/node": "^25.3.0",
+    "obsidian": "^1.12.2",
+    "typescript": "^5.9.3"
+  }
 }
