@@ -1,5 +1,5 @@
 {
-  "include": ["src/**/*", "version-bump.ts"],
+  "include": ["src/**/*", "version-bump.ts", "build.ts"],
   "compilerOptions": {
     "target": "ESNext",
     "lib": ["DOM", "ESNext"],
