@@ -4,20 +4,38 @@ import type ReviewPlugin from "./plugin";
 
 export class ReviewSettingTab extends PluginSettingTab {
   plugin: ReviewPlugin;
-  private debouncedSave = debounce(
-    () => this.plugin.runAsync(this.plugin.saveSettings(), "save settings"),
-    500,
-    true,
-  );
+
+  /**
+   * Excluded-folder rows as typed, before normalization — null while the tab
+   * is closed. Rows live here rather than in the plugin so a half-typed or
+   * momentarily-empty one survives on screen: setExcludedFolders drops empties
+   * and dedupes, which would otherwise delete a row out from under the user
+   * mid-word.
+   */
+  private drafts: string[] | null = null;
+
+  private debouncedCommit = debounce(() => this.commit(), 500, true);
 
   constructor(app: App, plugin: ReviewPlugin) {
     super(app, plugin);
     this.plugin = plugin;
   }
 
+  private commit(): void {
+    this.plugin.runAsync(
+      this.plugin.setExcludedFolders(this.drafts ?? []),
+      "save excluded folders",
+    );
+  }
+
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
+
+    if (!this.drafts) {
+      this.drafts = [...this.plugin.review.excludedFolders];
+    }
+    const drafts = this.drafts;
 
     const reviewSetting = new Setting(containerEl)
       .setName("Review")
@@ -50,31 +68,29 @@ export class ReviewSettingTab extends PluginSettingTab {
       .setName("Excluded folders")
       .setDesc("Files in these folders will not appear in review.");
 
-    for (let i = 0; i < this.plugin.data.excludedFolders.length; i++) {
-      const applyFolder = (value: string) => {
-        this.plugin.data.excludedFolders[i] = value.replace(/\/+$/, "");
-        this.plugin.statusBar.update();
-      };
+    for (let i = 0; i < drafts.length; i++) {
       new Setting(containerEl)
         .setClass("review-excluded-folder")
         .addText((text) => {
-          text.setValue(this.plugin.data.excludedFolders[i]);
+          text.setValue(drafts[i]);
+          // Only the draft changes per keystroke; normalization runs once the
+          // debounce fires, so typing a second "Templates" cannot collapse two
+          // visible rows into one entry mid-word.
           text.onChange((value) => {
-            applyFolder(value);
-            this.debouncedSave();
+            drafts[i] = value;
+            this.debouncedCommit();
           });
           new FolderSuggest(this.app, text.inputEl).onSelect((folder) => {
             text.setValue(folder.path);
-            applyFolder(folder.path);
-            this.plugin.runAsync(this.plugin.saveSettings(), "save settings");
+            drafts[i] = folder.path;
+            this.commit();
           });
         })
         .addButton((btn) => {
           btn.setIcon("trash");
           btn.onClick(() => {
-            this.plugin.data.excludedFolders.splice(i, 1);
-            this.plugin.statusBar.update();
-            this.plugin.runAsync(this.plugin.saveSettings(), "save settings");
+            drafts.splice(i, 1);
+            this.commit();
             this.display();
           });
         });
@@ -83,9 +99,7 @@ export class ReviewSettingTab extends PluginSettingTab {
     new Setting(containerEl).addButton((btn) => {
       btn.setButtonText("Add excluded folder");
       btn.onClick(() => {
-        // Not persisted yet — typing in the new row saves it, and hide()
-        // prunes rows left empty.
-        this.plugin.data.excludedFolders.push("");
+        drafts.push("");
         this.display();
       });
     });
@@ -104,11 +118,9 @@ export class ReviewSettingTab extends PluginSettingTab {
   }
 
   hide(): void {
-    const folders = this.plugin.data.excludedFolders;
-    const pruned = folders.filter((folder) => folder !== "");
-    if (pruned.length !== folders.length) {
-      this.plugin.data.excludedFolders = pruned;
-      this.plugin.runAsync(this.plugin.saveSettings(), "save settings");
-    }
+    // Commit rather than prune: an edit made inside the debounce window would
+    // otherwise be lost when the tab closes.
+    this.commit();
+    this.drafts = null;
   }
 }

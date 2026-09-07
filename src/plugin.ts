@@ -12,13 +12,13 @@ import {
   type SavedData,
 } from "./data";
 import { ConfirmResetModal, ReviewMenuModal } from "./modals";
-import { isExcluded, ReviewState, type ReviewStats } from "./reviewState";
+import { Review, type ReviewStats } from "./review";
 import { ReviewSettingTab } from "./settingsTab";
 import { StatusBar } from "./statusBar";
 
 export default class ReviewPlugin extends Plugin {
   data!: PluginData;
-  private state = new ReviewState();
+  readonly review = new Review();
   statusBar!: StatusBar;
 
   /**
@@ -157,7 +157,11 @@ export default class ReviewPlugin extends Plugin {
       this.saveBlocked = null;
     }
 
-    this.state.load(this.data.reviewedPaths, this.data.reviewStartedAt);
+    this.review.load(
+      this.data.reviewedPaths,
+      this.data.excludedFolders,
+      this.data.reviewStartedAt,
+    );
   };
 
   saveSettings = (): Promise<void> => {
@@ -169,8 +173,9 @@ export default class ReviewPlugin extends Plugin {
       return Promise.resolve();
     }
 
-    this.data.reviewedPaths = [...this.state.reviewedPaths];
-    this.data.reviewStartedAt = this.state.reviewStartedAt;
+    this.data.reviewedPaths = [...this.review.reviewedPaths];
+    this.data.excludedFolders = [...this.review.excludedFolders];
+    this.data.reviewStartedAt = this.review.reviewStartedAt;
 
     // Snapshot at call time, not write time: a queued write must carry the
     // state that was current when it was requested, not whatever `this.data`
@@ -215,7 +220,7 @@ export default class ReviewPlugin extends Plugin {
   };
 
   isFileEligible = (path: string): boolean => {
-    return !isExcluded(path, this.data.excludedFolders);
+    return this.review.isEligible(path);
   };
 
   getEligibleFiles = (): TFile[] => {
@@ -231,11 +236,11 @@ export default class ReviewPlugin extends Plugin {
   };
 
   isReviewed = (path: string): boolean => {
-    return this.state.isReviewed(path);
+    return this.review.isReviewed(path);
   };
 
   getStats = (): ReviewStats => {
-    return this.state.stats(this.getEligibleFiles().map((f) => f.path));
+    return this.review.stats(this.getEligibleFiles().map((f) => f.path));
   };
 
   openReviewMenu = () => {
@@ -244,7 +249,7 @@ export default class ReviewPlugin extends Plugin {
 
   openRandomFile = async () => {
     const eligible = this.getEligibleFiles();
-    const path = this.state.pickRandomUnreviewed(eligible.map((f) => f.path));
+    const path = this.review.pickRandomUnreviewed(eligible.map((f) => f.path));
     const randomFile = eligible.find((f) => f.path === path);
     if (!randomFile) {
       new Notice("All files are reviewed");
@@ -270,8 +275,9 @@ export default class ReviewPlugin extends Plugin {
     // a save that was already queued from the state we are about to undo.
     await this.savePending;
 
-    const paths = [...this.state.reviewedPaths];
-    const startedAt = this.state.reviewStartedAt;
+    const paths = [...this.review.reviewedPaths];
+    const excludedFolders = [...this.review.excludedFolders];
+    const startedAt = this.review.reviewStartedAt;
 
     apply();
     this.statusBar.update();
@@ -280,7 +286,7 @@ export default class ReviewPlugin extends Plugin {
       await this.saveSettings();
       return true;
     } catch (err) {
-      this.state.load(paths, startedAt);
+      this.review.load(paths, excludedFolders, startedAt);
       this.statusBar.update();
       throw err;
     }
@@ -290,7 +296,7 @@ export default class ReviewPlugin extends Plugin {
     const file = this.getActiveMarkdownFile();
     if (!file) return;
 
-    const saved = await this.mutate(() => this.state.markReviewed(file.path));
+    const saved = await this.mutate(() => this.review.markReviewed(file.path));
     if (saved && openNext) await this.openRandomFile();
   };
 
@@ -298,7 +304,11 @@ export default class ReviewPlugin extends Plugin {
     const file = this.getActiveMarkdownFile();
     if (!file) return;
 
-    await this.mutate(() => this.state.markUnreviewed(file.path));
+    await this.mutate(() => this.review.markUnreviewed(file.path));
+  };
+
+  setExcludedFolders = async (list: string[]): Promise<boolean> => {
+    return this.mutate(() => this.review.setExcludedFolders(list));
   };
 
   resetReview = async ({
@@ -308,7 +318,7 @@ export default class ReviewPlugin extends Plugin {
   } = {}): Promise<boolean> => {
     if (confirm && !(await this.confirmReset())) return false;
 
-    return this.mutate(() => this.state.reset());
+    return this.mutate(() => this.review.reset());
   };
 
   private confirmReset = (): Promise<boolean> => {
@@ -318,20 +328,17 @@ export default class ReviewPlugin extends Plugin {
     });
   };
 
+  // The `instanceof` stays on this side of the boundary so `Review` needs no
+  // Obsidian import and stays directly testable.
   private handleFileRename = async (file: TAbstractFile, oldPath: string) => {
-    const changed =
-      file instanceof TFolder
-        ? this.state.renameFolder(oldPath, file.path)
-        : this.state.renameFile(oldPath, file.path);
-    if (changed) await this.saveSettings();
+    if (this.review.rename(oldPath, file.path, file instanceof TFolder)) {
+      this.statusBar.update();
+      await this.saveSettings();
+    }
   };
 
   private handleFileDelete = async (file: TAbstractFile) => {
-    const changed =
-      file instanceof TFolder
-        ? this.state.deleteFolder(file.path)
-        : this.state.deleteFile(file.path);
-    if (changed) {
+    if (this.review.remove(file.path, file instanceof TFolder)) {
       this.statusBar.update();
       await this.saveSettings();
     }
