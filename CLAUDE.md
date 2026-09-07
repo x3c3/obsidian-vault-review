@@ -12,7 +12,9 @@ The current next step for this repo is tracked in the workspace backlog at `../N
 
 ### Data Model
 
-The plugin persists only the set of reviewed file paths plus excluded folders (via Obsidian's `loadData`/`saveData` into `data.json`). The vault itself is the source of truth for which files exist — so `ReviewState.renameFolder`/`renameFile` (rename) and `deleteFolder`/`deleteFile` (delete) reconcile the stored set against current vault state rather than maintaining an authoritative file list.
+The plugin persists only the set of reviewed file paths plus excluded folders (via Obsidian's `loadData`/`saveData` into `data.json`). Both belong to `Review`, which is their single owner — the vault is the source of truth for what exists, so `Review.rename`/`remove` reconcile *both* stored sets against current vault state rather than maintaining an authoritative file list. The file-vs-folder distinction crosses that boundary as a boolean, so `instanceof TFolder` stays in `plugin.ts` and `Review` needs no Obsidian import.
+
+`Review.setExcludedFolders` is the only way to write excluded folders. It trims, strips trailing slashes, drops empties, and dedupes — a folder stored unnormalized matches nothing, silently.
 
 ### Release Process
 
@@ -28,4 +30,4 @@ Never hand-create GitHub releases — the workflow attaches `main.js`, `manifest
 
 ## Testing
 
-`ReviewState` and `isExcluded` live in `src/reviewState.ts`, free of Obsidian APIs, and are tested directly in `src/reviewState.test.ts` (clock and rng are injectable). Plugin integration (Obsidian API calls) is not unit-tested — the `__mocks__/` stubs only cover what the tests need.
+`Review` lives in `src/review.ts` and the persisted-shape helpers in `src/data.ts`, both free of Obsidian APIs, and both are tested directly (`src/review.test.ts`, `src/data.test.ts`; clock and rng are injectable). Keep those two modules import-free — there is no Obsidian mock, and adding one would mean the boundary has leaked. Plugin integration (Obsidian API calls) is not unit-tested.
