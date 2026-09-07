@@ -12,7 +12,7 @@ import {
   type SavedData,
 } from "./data";
 import { ConfirmResetModal, ReviewMenuModal } from "./modals";
-import { Review, type ReviewStats } from "./review";
+import { pickRandom, Review, type ReviewStats } from "./review";
 import { ReviewSettingTab } from "./settingsTab";
 import { StatusBar } from "./statusBar";
 
@@ -248,14 +248,25 @@ export default class ReviewPlugin extends Plugin {
   };
 
   openRandomFile = async () => {
+    // An empty eligible list and a fully reviewed one are different problems,
+    // and congratulating someone on a review they never started points them
+    // away from the settings tab, which is where the actual fault is.
     const eligible = this.getEligibleFiles();
-    const path = this.review.pickRandomUnreviewed(eligible.map((f) => f.path));
-    const randomFile = eligible.find((f) => f.path === path);
-    if (!randomFile) {
+    if (!eligible.length) {
+      new Notice(
+        "No files are eligible for review — check your excluded folders.",
+      );
+      return;
+    }
+
+    const unreviewed = eligible.filter((f) => !this.review.isReviewed(f.path));
+    if (!unreviewed.length) {
       new Notice("All files are reviewed");
       return;
     }
-    await this.app.workspace.getLeaf(false).openFile(randomFile);
+
+    const next = pickRandom(unreviewed);
+    if (next) await this.app.workspace.getLeaf(false).openFile(next);
   };
 
   /**

@@ -1,3 +1,12 @@
+/** Uniform choice, or undefined when there is nothing to choose from. */
+export function pickRandom<T>(
+  items: readonly T[],
+  rng: () => number = Math.random,
+): T | undefined {
+  if (!items.length) return undefined;
+  return items[Math.floor(rng() * items.length)];
+}
+
 export type ReviewStats = {
   reviewed: number;
   eligible: number;
@@ -67,15 +76,6 @@ export class Review {
   reset(): void {
     this.reviewedPaths.clear();
     this.reviewStartedAt = undefined;
-  }
-
-  pickRandomUnreviewed(
-    eligible: string[],
-    rng: () => number = Math.random,
-  ): string | undefined {
-    const unreviewed = eligible.filter((p) => !this.reviewedPaths.has(p));
-    if (!unreviewed.length) return undefined;
-    return unreviewed[Math.floor(rng() * unreviewed.length)];
   }
 
   stats(eligible: string[]): ReviewStats {
