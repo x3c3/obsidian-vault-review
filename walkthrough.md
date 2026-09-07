@@ -1,56 +1,58 @@
 # Obsidian Review Walkthrough
 
-*2026-06-12T16:25:24Z by Showboat 0.6.1*
-<!-- showboat-id: a84cd69e-6f91-4013-9dba-50fdf434c22a -->
+*2026-09-07T23:08:35Z by Showboat 0.6.1*
+<!-- showboat-id: d877396c-d294-4fe0-acf2-b5855e679a21 -->
 
 ## Overview
 
-Obsidian Review is a plugin that helps you work through your vault one random
-note at a time: open a random unreviewed file, mark it reviewed, repeat until
-everything is done. Progress is a simple set of reviewed file paths persisted
-via Obsidian's `loadData`/`saveData` into the plugin's `data.json`.
+Obsidian Review helps you work through your vault one random note at a time:
+open a random unreviewed file, mark it reviewed, repeat until everything is
+done. Progress is a set of reviewed file paths plus a list of excluded
+folders, persisted via Obsidian's `loadData`/`saveData` into the plugin's
+`data.json`.
 
 Key technologies: TypeScript, Bun (bundler + test runner), Biome
 (lint/format), and the Obsidian plugin API. The bundle entry point is
 `src/main.ts`, which Bun compiles to `./main.js` (CommonJS, `obsidian` and
 `electron` left external).
 
-The codebase was recently split from a single 566-line `src/main.ts` into
-focused modules. The guiding boundary: everything that touches the Obsidian
-API lives in `plugin.ts` and the UI files, while the review-tracking logic
-itself (`reviewState.ts`) is plain TypeScript with no Obsidian imports, so it
-can be unit-tested directly.
+The guiding boundary: everything that touches the Obsidian API lives in
+`plugin.ts` and the UI files, while the review logic (`review.ts`) and the
+persisted-shape helpers (`data.ts`) are plain TypeScript with no Obsidian
+imports, so both can be unit-tested directly.
 
 ## Architecture
 
-The module layout after the refactor:
+The module layout:
 
 ```bash
 cat <<'TREE'
 src/
   main.ts            Obsidian entrypoint; re-exports the plugin
-  plugin.ts          ReviewPlugin lifecycle: commands, persistence, migration, events
-  reviewState.ts     ReviewState state machine + isExcluded (no Obsidian APIs)
-  reviewState.test.ts  Direct unit tests for reviewState.ts
+  plugin.ts          ReviewPlugin lifecycle: commands, persistence, events
+  review.ts          Review state machine + pickRandom (no Obsidian APIs)
+  review.test.ts     Direct unit tests for review.ts
+  data.ts            Persisted shape, defaults, normalizeData (no Obsidian APIs)
+  data.test.ts       Direct unit tests for data.ts
   statusBar.ts       Status-bar indicator + click menu
   settingsTab.ts     Settings UI (reset, excluded folders, status-bar toggle)
   modals.ts          ConfirmResetModal + ReviewMenuModal
   folderSuggest.ts   Folder autocomplete for the settings tab
-  __mocks__/         Obsidian API stubs for bun test
 TREE
 ```
 
 ```output
 src/
   main.ts            Obsidian entrypoint; re-exports the plugin
-  plugin.ts          ReviewPlugin lifecycle: commands, persistence, migration, events
-  reviewState.ts     ReviewState state machine + isExcluded (no Obsidian APIs)
-  reviewState.test.ts  Direct unit tests for reviewState.ts
+  plugin.ts          ReviewPlugin lifecycle: commands, persistence, events
+  review.ts          Review state machine + pickRandom (no Obsidian APIs)
+  review.test.ts     Direct unit tests for review.ts
+  data.ts            Persisted shape, defaults, normalizeData (no Obsidian APIs)
+  data.test.ts       Direct unit tests for data.ts
   statusBar.ts       Status-bar indicator + click menu
   settingsTab.ts     Settings UI (reset, excluded folders, status-bar toggle)
   modals.ts          ConfirmResetModal + ReviewMenuModal
   folderSuggest.ts   Folder autocomplete for the settings tab
-  __mocks__/         Obsidian API stubs for bun test
 ```
 
 Module sizes show where the weight is — the plugin shell is the largest file,
@@ -61,27 +63,28 @@ wc -l src/*.ts | sort -rn
 ```
 
 ```output
-     943 total
-     302 src/plugin.ts
-     202 src/reviewState.test.ts
-     115 src/modals.ts
-     113 src/settingsTab.ts
-     113 src/reviewState.ts
-      65 src/statusBar.ts
-      31 src/folderSuggest.ts
+    1231 total
+     357 src/plugin.ts
+     250 src/review.test.ts
+     159 src/review.ts
+     126 src/settingsTab.ts
+     121 src/modals.ts
+      92 src/data.test.ts
+      59 src/statusBar.ts
+      51 src/data.ts
+      14 src/folderSuggest.ts
        2 src/main.ts
 ```
 
-Data flow in one paragraph: `ReviewPlugin` owns a single `ReviewState`
-instance. On load it feeds persisted data into the state via `state.load()`;
-on every mutation it reads `state.reviewedPaths` / `state.reviewStartedAt`
-back out and saves. The vault is the source of truth for which files *exist*
-— the stored set is reconciled against vault rename/delete events rather than
-maintaining an authoritative file list.
+Data flow in one paragraph: `ReviewPlugin` owns a single `Review` instance. On
+load it feeds persisted data into it via `review.load()`; on every mutation it
+reads the fields back out and saves. The vault is the source of truth for
+which files *exist* — the stored set is reconciled against vault rename/delete
+events rather than maintaining an authoritative file list.
 
 ## Entry point
 
-`src/main.ts` is now just Obsidian's expected entrypoint — two lines:
+`src/main.ts` is just Obsidian's expected entrypoint — two lines:
 
 ```bash
 cat src/main.ts
@@ -92,40 +95,160 @@ cat src/main.ts
 export { default } from "./plugin";
 ```
 
-## ReviewState: the core
+## data.ts: the persisted shape
 
-`src/reviewState.ts` is the heart of the plugin and deliberately imports
-nothing. It holds two pieces of state — the set of reviewed paths and the
-timestamp the current review started:
+`src/data.ts` owns everything about what lands in `data.json` — the type, the
+defaults, and the schema version. It imports nothing:
 
 ```bash
-sed -n '15,28p' src/reviewState.ts
+sed -n '1,18p' src/data.ts
+```
+
+```output
+export type PluginData = {
+  schemaVersion: number;
+  reviewedPaths: string[];
+  reviewStartedAt?: string;
+  excludedFolders: string[];
+  showStatusBar: boolean;
+};
+
+export const CURRENT_SCHEMA_VERSION = 2;
+
+export const DEFAULT_DATA: PluginData = {
+  schemaVersion: CURRENT_SCHEMA_VERSION,
+  reviewedPaths: [],
+  excludedFolders: [],
+  showStatusBar: true,
+};
+
+export type SavedData = Partial<PluginData>;
+```
+
+`normalizeData` is the reason `SavedData` can be `Partial<PluginData>` without
+the rest of the plugin defending itself. It builds a fresh object from known
+fields, coercing each one rather than spreading whatever was on disk over the
+defaults — a spread would let a hand-edit or a sync conflict put a number where
+a boolean belongs:
+
+```bash
+sed -n '20,51p' src/data.ts
+```
+
+```output
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+/**
+ * `data.json` is the least trustworthy thing the plugin reads: a hand-edit, a
+ * sync conflict, or a schema written by a future version can put any shape in
+ * it, and a spread happily overwrites a well-typed default with a wrong-typed
+ * value. Coerce rather than throw — a bad field must degrade to its default so
+ * the settings tab still renders and the user can repair it from the UI.
+ */
+export function normalizeData(raw: unknown): Omit<PluginData, "schemaVersion"> {
+  const data = (typeof raw === "object" && raw !== null ? raw : {}) as Record<
+    string,
+    unknown
+  >;
+  const startedAt = data.reviewStartedAt;
+
+  return {
+    reviewedPaths: stringArray(data.reviewedPaths),
+    reviewStartedAt:
+      typeof startedAt === "string" && !Number.isNaN(Date.parse(startedAt))
+        ? startedAt
+        : undefined,
+    excludedFolders: stringArray(data.excludedFolders),
+    showStatusBar:
+      typeof data.showStatusBar === "boolean"
+        ? data.showStatusBar
+        : DEFAULT_DATA.showStatusBar,
+  };
+}
+```
+
+Two consequences worth noting. Building fresh means unknown keys are dropped
+on their own, which is why there is no explicit migration step: schema v1's
+nested `settings` object simply does not survive the trip. And coercing rather
+than throwing means a corrupt field degrades to its default, so the settings
+tab still renders and the user can repair it from the UI.
+
+## review.ts: the core
+
+`src/review.ts` is the heart of the plugin and deliberately imports nothing.
+`Review` owns *every* persisted review field — the reviewed set, the start
+timestamp, and the excluded folders:
+
+```bash
+sed -n '16,41p' src/review.ts
 ```
 
 ```output
 /**
- * The reviewed-set state machine, free of Obsidian APIs so it can be
- * tested directly. The plugin owns one instance, feeds it persisted
- * data via load(), and reads reviewedPaths/reviewStartedAt back out
- * when saving.
+ * Every persisted review field under one owner, free of Obsidian APIs so it can
+ * be tested directly. The plugin owns one instance, feeds it persisted data via
+ * load(), and reads the fields back out when saving.
+ *
+ * The vault is the source of truth for what exists, so rename()/remove()
+ * reconcile the stored paths against it rather than maintaining an
+ * authoritative file list. That reconciliation covers excludedFolders too — it
+ * lives here for exactly that reason.
  */
-export class ReviewState {
+export class Review {
   reviewedPaths = new Set<string>();
   reviewStartedAt?: string;
+  excludedFolders: string[] = [];
 
-  load(paths: string[], startedAt?: string): void {
+  load(paths: string[], excludedFolders: string[], startedAt?: string): void {
     this.reviewedPaths = new Set(paths);
+    this.excludedFolders = [...excludedFolders];
     this.reviewStartedAt = startedAt;
+  }
+
+  isEligible(path: string): boolean {
+    return !this.excludedFolders.some((folder) =>
+      path.startsWith(`${folder}/`),
+    );
   }
 ```
 
-The mutation methods are tiny, but note the injectable clock and rng — this is
-what makes the class deterministic under test. `markReviewed` starts the
-review clock only on the first mark; `pickRandomUnreviewed` filters the
-eligible list down to unreviewed paths before picking:
+The trailing slash in `isEligible`'s prefix check is load-bearing: `templates`
+must not exclude `templates-extra/note.md`. That check only works if the stored
+folder is already trimmed and slash-free, which is why writing
+`excludedFolders` goes through exactly one door:
 
 ```bash
-sed -n '34,58p' src/reviewState.ts
+sed -n '43,58p' src/review.ts
+```
+
+```output
+  /**
+   * The only way in. A folder that is not trimmed of whitespace or trailing
+   * slashes matches nothing, silently, so normalizing anywhere but here would
+   * leave a way to store one.
+   */
+  setExcludedFolders(list: string[]): void {
+    const normalized: string[] = [];
+    const seen = new Set<string>();
+    for (const entry of list) {
+      const folder = entry.trim().replace(/\/+$/, "");
+      if (!folder || seen.has(folder)) continue;
+      seen.add(folder);
+      normalized.push(folder);
+    }
+    this.excludedFolders = normalized;
+  }
+```
+
+The mutation methods are tiny, but note the injectable clock — that is what
+makes the class deterministic under test. `markReviewed` starts the review
+clock only on the first mark:
+
+```bash
+sed -n '64,79p' src/review.ts
 ```
 
 ```output
@@ -145,33 +268,26 @@ sed -n '34,58p' src/reviewState.ts
     this.reviewedPaths.clear();
     this.reviewStartedAt = undefined;
   }
-
-  pickRandomUnreviewed(
-    eligible: string[],
-    rng: () => number = Math.random,
-  ): string | undefined {
-    const unreviewed = eligible.filter((p) => !this.reviewedPaths.has(p));
-    if (!unreviewed.length) return undefined;
-    return unreviewed[Math.floor(rng() * unreviewed.length)];
-  }
 ```
 
 `stats` computes progress against whatever eligible list the caller passes in
-— the state never decides eligibility itself. Eligibility is the job of
-`isExcluded`, a free function at the top of the same file. The trailing slash
-in the prefix check is load-bearing: `templates` must not exclude
-`templates-extra/note.md`:
+— `Review` never decides which files exist, only which of the given ones are
+reviewed. Randomness is a free function at the top of the file, and it is
+deliberately dumb: it picks uniformly from whatever it is handed, leaving the
+"which files are even candidates" question to the caller:
 
 ```bash
-sed -n '1,6p' src/reviewState.ts && echo '...' && sed -n '60,71p' src/reviewState.ts
+sed -n '1,8p' src/review.ts && echo '...' && sed -n '81,91p' src/review.ts
 ```
 
 ```output
-export function isExcluded(
-  filePath: string,
-  excludedFolders: string[],
-): boolean {
-  return excludedFolders.some((folder) => filePath.startsWith(`${folder}/`));
+/** Uniform choice, or undefined when there is nothing to choose from. */
+export function pickRandom<T>(
+  items: readonly T[],
+  rng: () => number = Math.random,
+): T | undefined {
+  if (!items.length) return undefined;
+  return items[Math.floor(rng() * items.length)];
 }
 ...
   stats(eligible: string[]): ReviewStats {
@@ -180,7 +296,6 @@ export function isExcluded(
     return {
       reviewed,
       eligible: eligibleCount,
-      notReviewed: eligibleCount - reviewed,
       percentCompleted: eligibleCount
         ? Math.round((reviewed / eligibleCount) * 100)
         : 0,
@@ -188,153 +303,133 @@ export function isExcluded(
   }
 ```
 
-The last four methods reconcile the stored set against vault changes. Each
-returns a boolean — "did anything change" — so the plugin can skip a disk
-write when a rename or delete didn't touch any reviewed path. `renameFolder`
-shows the pattern: collect the rewrites first, then apply, since mutating a
-`Set` mid-iteration of additions would be fragile:
+The last two public methods reconcile the stored state against vault changes.
+Each returns a boolean — "did anything change" — so the plugin can skip a disk
+write when a rename or delete touched nothing. Both take an `isFolder` flag
+rather than an Obsidian object; that boolean is the whole file-vs-folder
+distinction crossing the boundary:
 
 ```bash
-sed -n '80,96p' src/reviewState.ts
+sed -n '93,105p' src/review.ts
 ```
 
 ```output
-  renameFolder(oldPath: string, newPath: string): boolean {
+  rename(oldPath: string, newPath: string, isFolder: boolean): boolean {
+    if (!isFolder) {
+      if (!this.reviewedPaths.has(oldPath)) return false;
+      this.reviewedPaths.delete(oldPath);
+      this.reviewedPaths.add(newPath);
+      return true;
+    }
+    return this.renameFolder(oldPath, newPath);
+  }
+
+  remove(path: string, isFolder: boolean): boolean {
+    return isFolder ? this.removeFolder(path) : this.reviewedPaths.delete(path);
+  }
+```
+
+`renameFolder` is where owning both sets pays off. Renaming a folder has to
+rewrite reviewed paths *and* any excluded-folder entry that named it or lived
+beneath it — miss the second half and a rename silently un-excludes a folder.
+Note the collect-then-apply for the reviewed set: adding to a `Set` while
+iterating it would be fragile:
+
+```bash
+sed -n '107,136p' src/review.ts
+```
+
+```output
+  private renameFolder(oldPath: string, newPath: string): boolean {
     const oldPrefix = `${oldPath}/`;
     const newPrefix = `${newPath}/`;
-    const toAdd: string[] = [];
     let changed = false;
+
+    const moved: string[] = [];
     for (const p of this.reviewedPaths) {
       if (p.startsWith(oldPrefix)) {
         this.reviewedPaths.delete(p);
-        toAdd.push(newPrefix + p.slice(oldPrefix.length));
+        moved.push(newPrefix + p.slice(oldPrefix.length));
         changed = true;
       }
     }
-    for (const p of toAdd) {
-      this.reviewedPaths.add(p);
+    for (const p of moved) this.reviewedPaths.add(p);
+
+    // The excluded folder itself, and any excluded folder beneath it.
+    this.excludedFolders = this.excludedFolders.map((folder) => {
+      if (folder === oldPath) {
+        changed = true;
+        return newPath;
+      }
+      if (folder.startsWith(oldPrefix)) {
+        changed = true;
+        return newPrefix + folder.slice(oldPrefix.length);
+      }
+      return folder;
+    });
+
+    return changed;
+  }
+```
+
+`removeFolder` is the same idea in the deleting direction — drop reviewed paths
+under the prefix, and drop the excluded entries that no longer name anything:
+
+```bash
+sed -n '138,158p' src/review.ts
+```
+
+```output
+  private removeFolder(folderPath: string): boolean {
+    const prefix = `${folderPath}/`;
+    let changed = false;
+
+    for (const p of this.reviewedPaths) {
+      if (p.startsWith(prefix)) {
+        this.reviewedPaths.delete(p);
+        changed = true;
+      }
     }
+
+    const kept = this.excludedFolders.filter(
+      (folder) => folder !== folderPath && !folder.startsWith(prefix),
+    );
+    if (kept.length !== this.excludedFolders.length) {
+      this.excludedFolders = kept;
+      changed = true;
+    }
+
     return changed;
   }
 ```
 
 ## ReviewPlugin: lifecycle and persistence
 
-`src/plugin.ts` is the Obsidian-facing shell. It starts with the persisted
-shape and the schema version that gates migration:
+`src/plugin.ts` is the Obsidian-facing shell. Its two private fields carry the
+whole persistence story — why writing might be refused, and how concurrent
+writes are ordered:
 
 ```bash
-sed -n '13,28p' src/plugin.ts
+sed -n '19,44p' src/plugin.ts
 ```
 
 ```output
-export type PluginData = {
-  schemaVersion: number;
-  reviewedPaths: string[];
-  reviewStartedAt?: string;
-  excludedFolders: string[];
-  showStatusBar: boolean;
-};
+export default class ReviewPlugin extends Plugin {
+  data!: PluginData;
+  readonly review = new Review();
+  statusBar!: StatusBar;
 
-const CURRENT_SCHEMA_VERSION = 2;
+  /**
+   * Why writing is refused, or null when it is allowed. Set on every path
+   * through loadSettings: data we failed to read must not be overwritten by
+   * the defaults we fell back to, and data from a newer plugin version must
+   * not be truncated to what this version understands.
+   */
+  private saveBlocked: string | null = null;
 
-const DEFAULT_DATA: PluginData = {
-  schemaVersion: CURRENT_SCHEMA_VERSION,
-  reviewedPaths: [],
-  excludedFolders: [],
-  showStatusBar: true,
-};
-```
+  /** Tail of the serialized write queue. Never rejects. */
+  private savePending: Promise<void> = Promise.resolve();
 
-Schema v1 nested `showStatusBar` inside a `settings` object and carried state
-for a since-removed snapshot feature. The v1-to-v2 migration flattens the one
-and drops the other:
-
-```bash
-sed -n '34,47p' src/plugin.ts
-```
-
-```output
-// v1: showStatusBar lived in a nested settings object, and a since-removed
-// snapshot feature stored its state alongside it.
-function migrateV1toV2(saved: SavedData): SavedData {
-  const migrated: Record<string, unknown> = { ...saved };
-  if (
-    saved.settings?.showStatusBar !== undefined &&
-    saved.showStatusBar === undefined
-  ) {
-    migrated.showStatusBar = saved.settings.showStatusBar;
-  }
-  delete migrated.settings;
-  delete migrated.snapshot;
-  return migrated as SavedData;
-}
-```
-
-`loadSettings` handles three cases: a failed read (fall back to defaults with
-a Notice), data from a *newer* plugin version (load read-only, preserve the
-newer `schemaVersion`), and normal-or-older data (migrate if needed, stamp the
-current version). The forward-compatibility branch pairs with a guard in
-`saveSettings` that refuses to overwrite newer data:
-
-```bash
-sed -n '147,182p' src/plugin.ts
-```
-
-```output
-    const savedVersion = saved
-      ? (saved.schemaVersion ?? 1)
-      : CURRENT_SCHEMA_VERSION;
-
-    if (savedVersion > CURRENT_SCHEMA_VERSION) {
-      // Data from a newer plugin version: load what we understand, but keep
-      // the newer schemaVersion so saveSettings refuses to overwrite it.
-      console.warn(
-        `[review] data has schema v${savedVersion}, newer than v${CURRENT_SCHEMA_VERSION}; loading read-only`,
-      );
-      new Notice(
-        "Review: saved data is from a newer plugin version. Changes will not be saved until the plugin is updated.",
-      );
-      this.data = { ...DEFAULT_DATA, ...saved, schemaVersion: savedVersion };
-    } else {
-      const migrated =
-        saved && savedVersion < 2 ? migrateV1toV2(saved) : (saved ?? {});
-      this.data = {
-        ...DEFAULT_DATA,
-        ...migrated,
-        schemaVersion: CURRENT_SCHEMA_VERSION,
-      };
-    }
-
-    this.state.load(this.data.reviewedPaths, this.data.reviewStartedAt);
-  };
-
-  saveSettings = async () => {
-    if (this.data.schemaVersion > CURRENT_SCHEMA_VERSION) {
-      console.warn(
-        `[review] not saving: data has schema v${this.data.schemaVersion}, newer than v${CURRENT_SCHEMA_VERSION}`,
-      );
-      return;
-    }
-    this.data.reviewedPaths = [...this.state.reviewedPaths];
-    this.data.reviewStartedAt = this.state.reviewStartedAt;
-```
-
-Note the last two lines: saving serializes the `ReviewState` back into the
-plain `data` object. The state class is the runtime authority; `data` is just
-its persisted projection plus the settings.
-
-### runAsync: the error-surfacing bridge
-
-Obsidian UI callbacks (command palette, menus, buttons) can't `await`. Every
-fire-and-forget call in the codebase goes through `runAsync`, which logs and
-raises a Notice instead of letting rejections vanish:
-
-```bash
-sed -n '54,63p' src/plugin.ts
-```
-
-```output
   /**
    * Fire-and-forget bridge for UI callbacks that cannot await: surfaces
    * rejections via Notice instead of letting them vanish.
@@ -347,15 +442,206 @@ sed -n '54,63p' src/plugin.ts
   };
 ```
 
+`runAsync` is the error-surfacing bridge. Obsidian UI callbacks (command
+palette, menus, buttons) cannot `await`, so every fire-and-forget call in the
+codebase goes through it rather than letting rejections vanish.
+
+`loadSettings` distinguishes three states, and the distinctions matter more
+than the loading does. A read that *threw* is not the same as `saved === null`
+(a fresh install), and data written by a *newer* plugin version is readable but
+must not be written back:
+
+```bash
+sed -n '117,165p' src/plugin.ts
+```
+
+```output
+  loadSettings = async () => {
+    let saved: SavedData | null = null;
+    let loadFailed = false;
+    try {
+      saved = await this.loadData();
+    } catch (err) {
+      // Distinct from `saved === null`, which is also a fresh install.
+      loadFailed = true;
+      console.error("[review] loadData failed; running read-only", err);
+      new Notice(
+        "Review: could not read saved data. The plugin is read-only until Obsidian reloads it — your saved review will not be overwritten. See console for details.",
+      );
+    }
+
+    const savedVersion = saved?.schemaVersion ?? CURRENT_SCHEMA_VERSION;
+    const isNewer = savedVersion > CURRENT_SCHEMA_VERSION;
+
+    if (isNewer) {
+      console.warn(
+        `[review] data has schema v${savedVersion}, newer than v${CURRENT_SCHEMA_VERSION}; loading read-only`,
+      );
+      new Notice(
+        "Review: saved data is from a newer plugin version. Changes will not be saved until the plugin is updated.",
+      );
+    }
+
+    this.data = {
+      ...normalizeData(saved),
+      // Keep a newer version's number, so the file is not truncated to v2
+      // if something later lifts the write block.
+      schemaVersion: isNewer ? savedVersion : CURRENT_SCHEMA_VERSION,
+    };
+
+    // Assigned on every path, back to null included, so a reload after a
+    // transient read failure lifts the block.
+    if (loadFailed) {
+      this.saveBlocked = "saved data could not be read";
+    } else if (isNewer) {
+      this.saveBlocked = "saved data is from a newer plugin version";
+    } else {
+      this.saveBlocked = null;
+    }
+
+    this.review.load(
+      this.data.reviewedPaths,
+      this.data.excludedFolders,
+      this.data.reviewStartedAt,
+    );
+  };
+```
+
+`saveSettings` honours that block, then does two things easy to get wrong. It
+snapshots the payload at *call* time, because a queued write must carry the
+state that was current when it was requested rather than whatever `this.data`
+holds when its turn comes. And it chains onto `savePending` with the *same*
+handler in both arms, so a failed predecessor cannot cancel its successor:
+
+```bash
+sed -n '167,197p' src/plugin.ts
+```
+
+```output
+  saveSettings = (): Promise<void> => {
+    if (this.saveBlocked) {
+      console.warn(`[review] not saving: ${this.saveBlocked}`);
+      new Notice(
+        `Review: ${this.saveBlocked}. Changes will not be saved until you reload.`,
+      );
+      return Promise.resolve();
+    }
+
+    this.data.reviewedPaths = [...this.review.reviewedPaths];
+    this.data.excludedFolders = [...this.review.excludedFolders];
+    this.data.reviewStartedAt = this.review.reviewStartedAt;
+
+    // Snapshot at call time, not write time: a queued write must carry the
+    // state that was current when it was requested, not whatever `this.data`
+    // holds by the time its turn comes.
+    const payload: PluginData = {
+      ...this.data,
+      reviewedPaths: [...this.data.reviewedPaths],
+      excludedFolders: [...this.data.excludedFolders],
+    };
+
+    // Serialize, so overlapping saves land in call order. Both arms run the
+    // write: a failed predecessor must not stop its successor.
+    const next = this.savePending.then(
+      () => this.writeSettings(payload),
+      () => this.writeSettings(payload),
+    );
+    this.savePending = next.catch(() => {});
+    return next;
+  };
+```
+
+`mutate` is the counterpart on the read side of the UI: it makes "the screen
+shows progress" and "the progress is on disk" the same fact. A refused write is
+declined before anything changes; a failed one is rolled back and rethrown:
+
+```bash
+sed -n '272,304p' src/plugin.ts
+```
+
+```output
+  /**
+   * Apply a review-state change and report whether it was persisted. The UI
+   * must not show progress that is not on disk: a refused write is declined
+   * before anything changes, and a failed one is rolled back.
+   */
+  private mutate = async (apply: () => void): Promise<boolean> => {
+    if (this.saveBlocked) {
+      new Notice(
+        `Review: ${this.saveBlocked}. Changes will not be saved until you reload.`,
+      );
+      return false;
+    }
+
+    // Settle any in-flight write first, so a rollback cannot be overtaken by
+    // a save that was already queued from the state we are about to undo.
+    await this.savePending;
+
+    const paths = [...this.review.reviewedPaths];
+    const excludedFolders = [...this.review.excludedFolders];
+    const startedAt = this.review.reviewStartedAt;
+
+    apply();
+    this.statusBar.update();
+
+    try {
+      await this.saveSettings();
+      return true;
+    } catch (err) {
+      this.review.load(paths, excludedFolders, startedAt);
+      this.statusBar.update();
+      throw err;
+    }
+  };
+```
+
+Every state-changing action funnels through `mutate`, which is what makes
+"mark and open next" honest — it only advances if the mark actually landed:
+
+```bash
+sed -n '306,333p' src/plugin.ts
+```
+
+```output
+  markReviewed = async ({ openNext = false }: { openNext?: boolean } = {}) => {
+    const file = this.getActiveMarkdownFile();
+    if (!file) return;
+
+    const saved = await this.mutate(() => this.review.markReviewed(file.path));
+    if (saved && openNext) await this.openRandomFile();
+  };
+
+  markUnreviewed = async () => {
+    const file = this.getActiveMarkdownFile();
+    if (!file) return;
+
+    await this.mutate(() => this.review.markUnreviewed(file.path));
+  };
+
+  setExcludedFolders = async (list: string[]): Promise<boolean> => {
+    return this.mutate(() => this.review.setExcludedFolders(list));
+  };
+
+  resetReview = async ({
+    confirm = true,
+  }: {
+    confirm?: boolean;
+  } = {}): Promise<boolean> => {
+    if (confirm && !(await this.confirmReset())) return false;
+
+    return this.mutate(() => this.review.reset());
+  };
+```
+
 ### onload: commands and event wiring
 
-`onload` registers a ribbon icon, the status bar, four commands, the settings
+`onload` registers a ribbon icon, the status bar, five commands, the settings
 tab, and the vault event handlers. The mark commands use `checkCallback` so
 they only appear in the palette when the active file is in the right state —
 here is the representative one:
 
 ```bash
-sed -n '79,87p' src/plugin.ts
+sed -n '60,68p' src/plugin.ts
 ```
 
 ```output
@@ -370,67 +656,75 @@ sed -n '79,87p' src/plugin.ts
     });
 ```
 
-The vault event handlers are where the reconciliation strategy from the data
-model shows up. Rename and delete events dispatch on `TFolder` vs file, call
-the matching `ReviewState` method, and only persist when the state reports a
-change:
+The vault event handlers are where the reconciliation strategy shows up. Both
+collapse to one line, because `Review` already dispatches on the folder flag —
+and the `instanceof` deliberately stays on this side of the boundary:
 
 ```bash
-sed -n '284,301p' src/plugin.ts
+sed -n '342,356p' src/plugin.ts
 ```
 
 ```output
+  // The `instanceof` stays on this side of the boundary so `Review` needs no
+  // Obsidian import and stays directly testable.
   private handleFileRename = async (file: TAbstractFile, oldPath: string) => {
-    const changed =
-      file instanceof TFolder
-        ? this.state.renameFolder(oldPath, file.path)
-        : this.state.renameFile(oldPath, file.path);
-    if (changed) await this.saveSettings();
+    if (this.review.rename(oldPath, file.path, file instanceof TFolder)) {
+      this.statusBar.update();
+      await this.saveSettings();
+    }
   };
 
   private handleFileDelete = async (file: TAbstractFile) => {
-    const changed =
-      file instanceof TFolder
-        ? this.state.deleteFolder(file.path)
-        : this.state.deleteFile(file.path);
-    if (changed) {
+    if (this.review.remove(file.path, file instanceof TFolder)) {
       this.statusBar.update();
       await this.saveSettings();
     }
   };
 ```
 
-The core user action, `openRandomFile`, shows the division of labor cleanly:
-the plugin gathers eligible files from the vault (Obsidian API), the state
-picks one (pure logic), and the plugin opens it (Obsidian API again):
+`openRandomFile` is the core user action, and it separates two failures that
+look alike from the outside. An empty eligible list means the excluded folders
+swallowed the vault; a fully reviewed one means the user is done. Congratulating
+someone on a review they never started points them away from the settings tab,
+which is where the actual fault is:
 
 ```bash
-sed -n '233,242p' src/plugin.ts
+sed -n '250,270p' src/plugin.ts
 ```
 
 ```output
   openRandomFile = async () => {
+    // An empty eligible list and a fully reviewed one are different problems,
+    // and congratulating someone on a review they never started points them
+    // away from the settings tab, which is where the actual fault is.
     const eligible = this.getEligibleFiles();
-    const path = this.state.pickRandomUnreviewed(eligible.map((f) => f.path));
-    const randomFile = eligible.find((f) => f.path === path);
-    if (!randomFile) {
+    if (!eligible.length) {
+      new Notice(
+        "No files are eligible for review — check your excluded folders.",
+      );
+      return;
+    }
+
+    const unreviewed = eligible.filter((f) => !this.review.isReviewed(f.path));
+    if (!unreviewed.length) {
       new Notice("All files are reviewed");
       return;
     }
-    await this.app.workspace.getLeaf(false).openFile(randomFile);
+
+    const next = pickRandom(unreviewed);
+    if (next) await this.app.workspace.getLeaf(false).openFile(next);
   };
 ```
 
 ## Status bar
 
 `src/statusBar.ts` renders "Reviewed" / "Not reviewed" for the active file and
-hides itself entirely when there is no eligible markdown file open (or the
-user disabled it). It is refreshed from three places: `onload`'s `file-open`
-event, every mark/unmark/reset in the plugin, and the settings tab. Clicking
-it opens a small checked menu to toggle the state:
+hides itself entirely when there is no eligible markdown file open (or the user
+disabled it). It is refreshed from three places: `onload`'s `file-open` event,
+every mutation in the plugin, and the settings tab:
 
 ```bash
-sed -n '21,35p' src/statusBar.ts
+sed -n '19,29p' src/statusBar.ts
 ```
 
 ```output
@@ -443,104 +737,196 @@ sed -n '21,35p' src/statusBar.ts
 
     this.setIsVisible(this.plugin.data.showStatusBar);
 
-    if (status === "reviewed") {
-      this.statusSpan.setText("Reviewed");
-    } else {
-      this.statusSpan.setText("Not reviewed");
-    }
+    this.element.setText(status === "reviewed" ? "Reviewed" : "Not reviewed");
   };
+```
+
+Clicking it opens a small checked menu to toggle the state. The click listener
+is registered through `plugin.registerDomEvent`, so Obsidian tears it down with
+the plugin rather than leaking it across reloads:
+
+```bash
+sed -n '12,17p' src/statusBar.ts
+```
+
+```output
+    element.setText("Not reviewed");
+    element.addClass("mod-clickable");
+    plugin.registerDomEvent(element, "click", this.onClick);
+
+    this.update();
+  }
 ```
 
 ## Settings tab
 
-`src/settingsTab.ts` renders four things: a reset button with the
-review-start date, live stats, the excluded-folders list, and the status-bar
-toggle. Excluded-folder rows are interesting — each text input gets a
-`FolderSuggest` autocomplete, typing saves through a 500ms debounce, and
-trailing slashes are normalized away:
+`src/settingsTab.ts` renders four things: a reset button with the review-start
+date, live stats, the excluded-folders list, and the status-bar toggle. The
+excluded-folder rows are the interesting part, and the reason is a tension
+between two correct behaviours: `setExcludedFolders` drops empties and dedupes,
+but doing that per keystroke would delete a row out from under the user
+mid-word. So the tab keeps its own unnormalized draft:
 
 ```bash
-sed -n '53,70p' src/settingsTab.ts
+sed -n '8,29p' src/settingsTab.ts
 ```
 
 ```output
-    for (let i = 0; i < this.plugin.data.excludedFolders.length; i++) {
-      const applyFolder = (value: string) => {
-        this.plugin.data.excludedFolders[i] = value.replace(/\/+$/, "");
-        this.plugin.statusBar.update();
-      };
+  /**
+   * Excluded-folder rows as typed, before normalization — null while the tab
+   * is closed. Rows live here rather than in the plugin so a half-typed or
+   * momentarily-empty one survives on screen: setExcludedFolders drops empties
+   * and dedupes, which would otherwise delete a row out from under the user
+   * mid-word.
+   */
+  private drafts: string[] | null = null;
+
+  private debouncedCommit = debounce(() => this.commit(), 500, true);
+
+  constructor(app: App, plugin: ReviewPlugin) {
+    super(app, plugin);
+    this.plugin = plugin;
+  }
+
+  private commit(): void {
+    this.plugin.runAsync(
+      this.plugin.setExcludedFolders(this.drafts ?? []),
+      "save excluded folders",
+    );
+  }
+```
+
+Typing updates only the draft and commits through a 500ms debounce; picking
+from the autocomplete commits immediately. `FolderSuggest` supplies its own
+`onSelect`, so the tab does not have to thread a callback through the
+constructor:
+
+```bash
+sed -n '71,97p' src/settingsTab.ts
+```
+
+```output
+    for (let i = 0; i < drafts.length; i++) {
       new Setting(containerEl)
         .setClass("review-excluded-folder")
         .addText((text) => {
-          text.setValue(this.plugin.data.excludedFolders[i]);
+          text.setValue(drafts[i]);
+          // Only the draft changes per keystroke; normalization runs once the
+          // debounce fires, so typing a second "Templates" cannot collapse two
+          // visible rows into one entry mid-word.
           text.onChange((value) => {
-            applyFolder(value);
-            this.debouncedSave();
+            drafts[i] = value;
+            this.debouncedCommit();
           });
-          new FolderSuggest(this.app, text.inputEl, (value) => {
-            applyFolder(value);
-            this.plugin.runAsync(this.plugin.saveSettings(), "save settings");
+          new FolderSuggest(this.app, text.inputEl).onSelect((folder) => {
+            text.setValue(folder.path);
+            drafts[i] = folder.path;
+            this.commit();
           });
         })
+        .addButton((btn) => {
+          btn.setIcon("trash");
+          btn.onClick(() => {
+            drafts.splice(i, 1);
+            this.commit();
+            this.display();
+          });
+        });
+    }
 ```
 
-"Add excluded folder" pushes an empty string and re-renders without saving;
-the cleanup happens in `hide()`, which prunes rows the user left empty when
-the tab closes:
+Closing the tab commits rather than prunes — an edit made inside the debounce
+window would otherwise be lost — and then drops the drafts so the next open
+re-reads from the plugin:
 
 ```bash
-sed -n '105,112p' src/settingsTab.ts
+sed -n '120,125p' src/settingsTab.ts
 ```
 
 ```output
   hide(): void {
-    const folders = this.plugin.data.excludedFolders;
-    const pruned = folders.filter((folder) => folder !== "");
-    if (pruned.length !== folders.length) {
-      this.plugin.data.excludedFolders = pruned;
-      this.plugin.runAsync(this.plugin.saveSettings(), "save settings");
-    }
+    // Commit rather than prune: an edit made inside the debounce window would
+    // otherwise be lost when the tab closes.
+    this.commit();
+    this.drafts = null;
   }
+```
+
+`src/folderSuggest.ts` is what that autocomplete is, in full — Obsidian's
+`AbstractInputSuggest` does everything else:
+
+```bash
+cat src/folderSuggest.ts
+```
+
+```output
+import { AbstractInputSuggest, type TFolder } from "obsidian";
+
+export class FolderSuggest extends AbstractInputSuggest<TFolder> {
+  getSuggestions(query: string): TFolder[] {
+    const lowerQuery = query.toLowerCase();
+    return this.app.vault
+      .getAllFolders()
+      .filter((folder) => folder.path.toLowerCase().includes(lowerQuery));
+  }
+
+  renderSuggestion(folder: TFolder, el: HTMLElement): void {
+    el.setText(folder.path);
+  }
+}
 ```
 
 ## Modals
 
-`src/modals.ts` holds two modals. `ConfirmResetModal` adapts Obsidian's
-callback-style modal into a promise the plugin can `await` — the `settled`
-flag ensures the promise resolves `false` exactly once even if the user
-dismisses the modal with Escape instead of a button:
+`src/modals.ts` holds two. `ConfirmResetModal` adapts Obsidian's
+callback-style modal into a promise the plugin can `await`. The `settled` flag
+makes the promise resolve exactly once however the modal is dismissed —
+button, Escape, or clicking away — and `onClose` is *overridden*, calling
+`super.onClose()` so Obsidian's own cleanup still runs:
 
 ```bash
-sed -n '4,12p' src/modals.ts && echo '  ...' && sed -n '33,39p' src/modals.ts
+sed -n '17,45p' src/modals.ts
 ```
 
 ```output
-export class ConfirmResetModal extends Modal {
-  constructor(app: App, resolve: (confirmed: boolean) => void) {
-    super(app);
+      .addButton((btn) => {
+        btn.setButtonText("Cancel");
+        btn.onClick(() => {
+          // settle before close: close() runs onClose, which settles false.
+          this.settle(false);
+          this.close();
+        });
+      })
+      .addButton((btn) => {
+        btn.setButtonText("Reset");
+        btn.setWarning();
+        btn.onClick(() => {
+          this.settle(true);
+          this.close();
+        });
+      });
+  }
 
-    this.setTitle("Reset review?");
+  /** Resolves exactly once, whichever way the modal is dismissed. */
+  private settle = (confirmed: boolean) => {
+    if (this.settled) return;
+    this.settled = true;
+    this.resolve(confirmed);
+  };
 
-    let settled = false;
-
-    new Setting(this.contentEl)
-  ...
-    this.onClose = () => {
-      if (!settled) {
-        settled = true;
-        resolve(false);
-      }
-    };
+  onClose(): void {
+    super.onClose();
+    this.settle(false);
   }
 ```
 
-`ReviewMenuModal` (reached via the ribbon icon or "Open review menu" command)
-is a `SuggestModal` whose suggestions adapt to the active file: an unreviewed
-file offers "mark and open next" first, a reviewed file offers unreview, and
-no eligible file leaves just "open random":
+`ReviewMenuModal` (reached via the ribbon icon or "Open review menu") is a
+`SuggestModal` whose suggestions adapt to the active file: an unreviewed file
+offers "mark and open next" first, a reviewed file offers unreview, and no
+eligible file leaves just "open random":
 
 ```bash
-sed -n '59,85p' src/modals.ts
+sed -n '65,91p' src/modals.ts
 ```
 
 ```output
@@ -575,55 +961,114 @@ sed -n '59,85p' src/modals.ts
 
 ## Testing approach
 
-Because `reviewState.ts` has no Obsidian imports, `src/reviewState.test.ts`
-tests it directly with `bun test` — no mocking of the state itself, and the
-injectable clock/rng make timing and randomness deterministic. Plugin
-integration (the Obsidian API surface) is deliberately not unit-tested; the
-`src/__mocks__/` stubs exist only to satisfy imports.
+Because `review.ts` and `data.ts` have no Obsidian imports, `bun test` exercises
+them directly — no mocking, and the injectable clock and rng make timing and
+randomness deterministic. There is no Obsidian mock in the repo at all: adding
+one would mean the boundary had leaked. Plugin integration (the Obsidian API
+surface) is deliberately not unit-tested.
 
 ```bash
-grep -c 'test(' src/reviewState.test.ts && grep 'describe(' src/reviewState.test.ts
+grep -c 'test(' src/review.test.ts && grep 'describe(' src/review.test.ts
 ```
 
 ```output
-29
-describe("isExcluded", () => {
+34
+describe("isEligible", () => {
+describe("setExcludedFolders", () => {
 describe("load", () => {
 describe("markReviewed", () => {
 describe("markUnreviewed", () => {
 describe("reset", () => {
-describe("pickRandomUnreviewed", () => {
+describe("pickRandom", () => {
 describe("stats", () => {
-describe("renameFile", () => {
-describe("renameFolder", () => {
-describe("deleteFile", () => {
-describe("deleteFolder", () => {
+describe("rename a file", () => {
+describe("rename a folder", () => {
+describe("remove a file", () => {
+describe("remove a folder", () => {
 ```
 
-29 tests across 11 suites — one suite per `ReviewState` method plus
-`isExcluded`. The deterministic-injection style is visible in the
-`pickRandomUnreviewed` suite, which pins the rng to the ends of its range:
+One suite per `Review` method, with rename and remove split by file vs folder
+because those are the two paths that behave differently. The
+deterministic-injection style is visible in the `pickRandom` suite, which pins
+the rng to the ends of its range:
 
 ```bash
-sed -n '92,97p' src/reviewState.test.ts
+grep -A6 'describe("pickRandom"' src/review.test.ts
 ```
 
 ```output
-  test("picks only from unreviewed files", () => {
-    const state = stateWith(["a.md"]);
-    const eligible = ["a.md", "b.md", "c.md"];
-    expect(state.pickRandomUnreviewed(eligible, () => 0)).toBe("b.md");
-    expect(state.pickRandomUnreviewed(eligible, () => 0.99)).toBe("c.md");
+describe("pickRandom", () => {
+  test("picks by the injected rng", () => {
+    const items = ["a", "b", "c"];
+    expect(pickRandom(items, () => 0)).toBe("a");
+    expect(pickRandom(items, () => 0.5)).toBe("b");
+    expect(pickRandom(items, () => 0.99)).toBe("c");
   });
+```
+
+`data.test.ts` covers `normalizeData` alone, and it is entirely about hostile
+input — the point of the function is that no shape on disk can crash the plugin:
+
+```bash
+grep -c 'test(' src/data.test.ts && grep -o 'test("[^"]*"' src/data.test.ts
+```
+
+```output
+8
+test("passes a fully valid object through"
+test("supplies defaults for an empty object"
+test("replaces a non-array excludedFolders with an empty list"
+test("replaces a string reviewedPaths with an empty list"
+test("drops non-string members of the path lists"
+test("drops a reviewStartedAt that is not a parseable date"
+test("keeps a date-only reviewStartedAt"
+test("falls back to true for a non-boolean showStatusBar"
+```
+
+## Build
+
+`build.ts` wraps `Bun.build`. The one subtlety is `throw: false` — Bun's
+default rejects with an `AggregateError`, which would make the failure handling
+below it unreachable and kill the `--watch` loop on the first typo:
+
+```bash
+sed -n '5,28p' build.ts
+```
+
+```output
+async function build() {
+  const result = await Bun.build({
+    entrypoints: ["src/main.ts"],
+    outdir: ".",
+    format: "cjs",
+    external: ["obsidian", "electron"],
+    minify: !isWatch,
+    sourcemap: isWatch ? "linked" : "none",
+    // Default is `throw: true`, which rejects with an AggregateError and leaves
+    // the failure handling below unreachable — and kills the watcher.
+    throw: false,
+  });
+
+  if (!result.success) {
+    console.error("Build failed");
+    for (const message of result.logs) console.error(message);
+    if (!isWatch) process.exit(1);
+    return;
+  }
+
+  console.log(
+    `Built main.js (${(result.outputs[0].size / 1024).toFixed(1)} KB)`,
+  );
+}
 ```
 
 ## Where to go next
 
 - `THEORY.md` — the rationale behind random-order review
-- `build.ts` / `deploy.ts` — Bun bundling and copy-to-vault deployment
-- `CLAUDE.md` — full command reference (`bun run dev`, `bun test`, release tagging)
+- `deploy.ts` — copy-to-vault deployment (`OBSIDIAN_DEPLOY_DEST`)
+- `CLAUDE.md` — command reference and the release process
 
-The takeaway from the refactor: anything you want to test goes in
-`reviewState.ts` with injectable dependencies; anything that touches Obsidian
-stays in the thin shells around it.
+The takeaway: anything you want to test goes in `review.ts` or `data.ts` with
+injectable dependencies and no Obsidian imports; anything that touches Obsidian
+stays in the thin shells around them.
 

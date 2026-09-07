@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.2.0
+
+### Fixed
+
+- Review commands now distinguish "nothing eligible to review" from "nothing left to review" (#102)
+- Modals override `onClose` instead of shadowing it, so Obsidian's own cleanup still runs (#103)
+- Persisted data is validated before it becomes live state, and unreadable saved data is never overwritten (#94, #96)
+- Only mutations that were actually persisted are committed to in-memory state (#97)
+- `bun run deploy` builds before copying to the vault, so a stale `main.js` can no longer be deployed (#105)
+- The build reports failures instead of dying on them (#93)
+- `version-bump.ts` fails loudly when `manifest.json` has no `minAppVersion` (#104)
+
+### Changed
+
+- All persisted review state consolidated under a single owner: `ReviewState` becomes `Review` (`src/review.ts`), with the persisted-shape helpers split into `src/data.ts` (#101)
+- Folder autocomplete uses `AbstractInputSuggest`'s own `onSelect` (#100)
+- Removed the v1 schema migration (#99). Data written by a pre-2.0.0 version now falls back to the default for "show status bar" instead of carrying the old nested setting forward; reviewed paths and excluded folders are unaffected.
+- Deleted dead and duplicated code, including the hand-rolled Obsidian mock (#98)
+- Update dependencies (typescript 7.0.2, biome 2.5.12, @types/node 26.5.0, @types/bun 1.4.1)
+
 ## 2.1.0
 
 ### Fixed
