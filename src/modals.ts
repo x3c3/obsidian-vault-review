@@ -2,12 +2,14 @@ import { type App, Modal, Setting, SuggestModal } from "obsidian";
 import type ReviewPlugin from "./plugin";
 
 export class ConfirmResetModal extends Modal {
+  private settled = false;
+  private resolve: (confirmed: boolean) => void;
+
   constructor(app: App, resolve: (confirmed: boolean) => void) {
     super(app);
+    this.resolve = resolve;
 
     this.setTitle("Reset review?");
-
-    let settled = false;
 
     new Setting(this.contentEl)
       .setName("This action cannot be undone")
@@ -15,8 +17,8 @@ export class ConfirmResetModal extends Modal {
       .addButton((btn) => {
         btn.setButtonText("Cancel");
         btn.onClick(() => {
-          settled = true;
-          resolve(false);
+          // settle before close: close() runs onClose, which settles false.
+          this.settle(false);
           this.close();
         });
       })
@@ -24,18 +26,22 @@ export class ConfirmResetModal extends Modal {
         btn.setButtonText("Reset");
         btn.setWarning();
         btn.onClick(() => {
-          settled = true;
-          resolve(true);
+          this.settle(true);
           this.close();
         });
       });
+  }
 
-    this.onClose = () => {
-      if (!settled) {
-        settled = true;
-        resolve(false);
-      }
-    };
+  /** Resolves exactly once, whichever way the modal is dismissed. */
+  private settle = (confirmed: boolean) => {
+    if (this.settled) return;
+    this.settled = true;
+    this.resolve(confirmed);
+  };
+
+  onClose(): void {
+    super.onClose();
+    this.settle(false);
   }
 }
 
