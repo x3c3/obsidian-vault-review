@@ -53,7 +53,10 @@ export class StatusBar {
     menu.showAtMouseEvent(event);
   };
 
+  // Obsidian's own `is-hidden` rules are scoped to ribbon and stacked-tab
+  // elements, so the class styles nothing on a status-bar item. `toggle` sets
+  // inline display, which needs no stylesheet to agree with it.
   private setIsVisible = (isVisible: boolean) => {
-    this.element.toggleClass("is-hidden", !isVisible);
+    this.element.toggle(isVisible);
   };
 }

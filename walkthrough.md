@@ -63,14 +63,14 @@ wc -l src/*.ts | sort -rn
 ```
 
 ```output
-    1231 total
+    1234 total
      357 src/plugin.ts
      250 src/review.test.ts
      159 src/review.ts
      126 src/settingsTab.ts
      121 src/modals.ts
       92 src/data.test.ts
-      59 src/statusBar.ts
+      62 src/statusBar.ts
       51 src/data.ts
       14 src/folderSuggest.ts
        2 src/main.ts
@@ -1071,4 +1071,3 @@ async function build() {
 The takeaway: anything you want to test goes in `review.ts` or `data.ts` with
 injectable dependencies and no Obsidian imports; anything that touches Obsidian
 stays in the thin shells around them.
-
