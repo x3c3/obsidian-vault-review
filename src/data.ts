@@ -15,24 +15,7 @@ export const DEFAULT_DATA: PluginData = {
   showStatusBar: true,
 };
 
-export type SavedData = Partial<PluginData> & {
-  settings?: { showStatusBar?: boolean };
-};
-
-// v1: showStatusBar lived in a nested settings object, and a since-removed
-// snapshot feature stored its state alongside it.
-export function migrateV1toV2(saved: SavedData): SavedData {
-  const migrated: Record<string, unknown> = { ...saved };
-  if (
-    saved.settings?.showStatusBar !== undefined &&
-    saved.showStatusBar === undefined
-  ) {
-    migrated.showStatusBar = saved.settings.showStatusBar;
-  }
-  delete migrated.settings;
-  delete migrated.snapshot;
-  return migrated as SavedData;
-}
+export type SavedData = Partial<PluginData>;
 
 function stringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];

@@ -7,7 +7,6 @@ import {
 } from "obsidian";
 import {
   CURRENT_SCHEMA_VERSION,
-  migrateV1toV2,
   normalizeData,
   type PluginData,
   type SavedData,
@@ -129,34 +128,30 @@ export default class ReviewPlugin extends Plugin {
       );
     }
 
-    const savedVersion = saved
-      ? (saved.schemaVersion ?? 1)
-      : CURRENT_SCHEMA_VERSION;
+    const savedVersion = saved?.schemaVersion ?? CURRENT_SCHEMA_VERSION;
+    const isNewer = savedVersion > CURRENT_SCHEMA_VERSION;
 
-    if (savedVersion > CURRENT_SCHEMA_VERSION) {
-      // Data from a newer plugin version: load what we understand, but keep
-      // the newer schemaVersion so the file is not truncated to v2 on write.
+    if (isNewer) {
       console.warn(
         `[review] data has schema v${savedVersion}, newer than v${CURRENT_SCHEMA_VERSION}; loading read-only`,
       );
       new Notice(
         "Review: saved data is from a newer plugin version. Changes will not be saved until the plugin is updated.",
       );
-      this.data = { ...normalizeData(saved), schemaVersion: savedVersion };
-    } else {
-      const migrated =
-        saved && savedVersion < 2 ? migrateV1toV2(saved) : (saved ?? {});
-      this.data = {
-        ...normalizeData(migrated),
-        schemaVersion: CURRENT_SCHEMA_VERSION,
-      };
     }
+
+    this.data = {
+      ...normalizeData(saved),
+      // Keep a newer version's number, so the file is not truncated to v2
+      // if something later lifts the write block.
+      schemaVersion: isNewer ? savedVersion : CURRENT_SCHEMA_VERSION,
+    };
 
     // Assigned on every path, back to null included, so a reload after a
     // transient read failure lifts the block.
     if (loadFailed) {
       this.saveBlocked = "saved data could not be read";
-    } else if (savedVersion > CURRENT_SCHEMA_VERSION) {
+    } else if (isNewer) {
       this.saveBlocked = "saved data is from a newer plugin version";
     } else {
       this.saveBlocked = null;
