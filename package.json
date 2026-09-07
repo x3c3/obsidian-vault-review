@@ -13,7 +13,7 @@
     "lint:fix": "biome check --write .",
     "version": "bun run version-bump.ts",
     "test": "bun test",
-    "deploy": "bun run deploy.ts"
+    "deploy": "bun run build && bun run deploy.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.11",
