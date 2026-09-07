@@ -288,24 +288,52 @@ export default class ReviewPlugin extends Plugin {
     await this.app.workspace.getLeaf(false).openFile(randomFile);
   };
 
+  /**
+   * Apply a review-state change and report whether it was persisted. The UI
+   * must not show progress that is not on disk: a refused write is declined
+   * before anything changes, and a failed one is rolled back.
+   */
+  private mutate = async (apply: () => void): Promise<boolean> => {
+    if (this.saveBlocked) {
+      new Notice(
+        `Review: ${this.saveBlocked}. Changes will not be saved until you reload.`,
+      );
+      return false;
+    }
+
+    // Settle any in-flight write first, so a rollback cannot be overtaken by
+    // a save that was already queued from the state we are about to undo.
+    await this.savePending;
+
+    const paths = [...this.state.reviewedPaths];
+    const startedAt = this.state.reviewStartedAt;
+
+    apply();
+    this.statusBar.update();
+
+    try {
+      await this.saveSettings();
+      return true;
+    } catch (err) {
+      this.state.load(paths, startedAt);
+      this.statusBar.update();
+      throw err;
+    }
+  };
+
   markReviewed = async ({ openNext = false }: { openNext?: boolean } = {}) => {
     const file = this.getActiveMarkdownFile();
     if (!file) return;
 
-    this.state.markReviewed(file.path);
-    this.statusBar.update();
-    await this.saveSettings();
-
-    if (openNext) await this.openRandomFile();
+    const saved = await this.mutate(() => this.state.markReviewed(file.path));
+    if (saved && openNext) await this.openRandomFile();
   };
 
   markUnreviewed = async () => {
     const file = this.getActiveMarkdownFile();
     if (!file) return;
 
-    this.state.markUnreviewed(file.path);
-    this.statusBar.update();
-    await this.saveSettings();
+    await this.mutate(() => this.state.markUnreviewed(file.path));
   };
 
   resetReview = async ({
@@ -315,10 +343,7 @@ export default class ReviewPlugin extends Plugin {
   } = {}): Promise<boolean> => {
     if (confirm && !(await this.confirmReset())) return false;
 
-    this.state.reset();
-    this.statusBar.update();
-    await this.saveSettings();
-    return true;
+    return this.mutate(() => this.state.reset());
   };
 
   private confirmReset = (): Promise<boolean> => {
