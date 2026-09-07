@@ -8,7 +8,6 @@ export function isExcluded(
 export type ReviewStats = {
   reviewed: number;
   eligible: number;
-  notReviewed: number;
   percentCompleted: number;
 };
 
@@ -63,7 +62,6 @@ export class ReviewState {
     return {
       reviewed,
       eligible: eligibleCount,
-      notReviewed: eligibleCount - reviewed,
       percentCompleted: eligibleCount
         ? Math.round((reviewed / eligibleCount) * 100)
         : 0,

@@ -4,14 +4,12 @@ import type ReviewPlugin from "./plugin";
 export class StatusBar {
   private element: HTMLElement;
   private plugin: ReviewPlugin;
-  private statusSpan: Element;
 
   constructor(element: HTMLElement, plugin: ReviewPlugin) {
     this.element = element;
     this.plugin = plugin;
-    this.statusSpan = element.createSpan("status");
 
-    this.statusSpan.setText("Not reviewed");
+    element.setText("Not reviewed");
     element.addClass("mod-clickable");
     plugin.registerDomEvent(element, "click", this.onClick);
 
@@ -27,11 +25,7 @@ export class StatusBar {
 
     this.setIsVisible(this.plugin.data.showStatusBar);
 
-    if (status === "reviewed") {
-      this.statusSpan.setText("Reviewed");
-    } else {
-      this.statusSpan.setText("Not reviewed");
-    }
+    this.element.setText(status === "reviewed" ? "Reviewed" : "Not reviewed");
   };
 
   private onClick = (event: MouseEvent) => {
