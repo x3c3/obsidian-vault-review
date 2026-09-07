@@ -63,8 +63,9 @@ export class ReviewSettingTab extends PluginSettingTab {
             applyFolder(value);
             this.debouncedSave();
           });
-          new FolderSuggest(this.app, text.inputEl, (value) => {
-            applyFolder(value);
+          new FolderSuggest(this.app, text.inputEl).onSelect((folder) => {
+            text.setValue(folder.path);
+            applyFolder(folder.path);
             this.plugin.runAsync(this.plugin.saveSettings(), "save settings");
           });
         })
