@@ -5,46 +5,17 @@ import {
   type TFile,
   TFolder,
 } from "obsidian";
+import {
+  CURRENT_SCHEMA_VERSION,
+  migrateV1toV2,
+  normalizeData,
+  type PluginData,
+  type SavedData,
+} from "./data";
 import { ConfirmResetModal, ReviewMenuModal } from "./modals";
 import { isExcluded, ReviewState, type ReviewStats } from "./reviewState";
 import { ReviewSettingTab } from "./settingsTab";
 import { StatusBar } from "./statusBar";
-
-export type PluginData = {
-  schemaVersion: number;
-  reviewedPaths: string[];
-  reviewStartedAt?: string;
-  excludedFolders: string[];
-  showStatusBar: boolean;
-};
-
-const CURRENT_SCHEMA_VERSION = 2;
-
-const DEFAULT_DATA: PluginData = {
-  schemaVersion: CURRENT_SCHEMA_VERSION,
-  reviewedPaths: [],
-  excludedFolders: [],
-  showStatusBar: true,
-};
-
-type SavedData = Partial<PluginData> & {
-  settings?: { showStatusBar?: boolean };
-};
-
-// v1: showStatusBar lived in a nested settings object, and a since-removed
-// snapshot feature stored its state alongside it.
-function migrateV1toV2(saved: SavedData): SavedData {
-  const migrated: Record<string, unknown> = { ...saved };
-  if (
-    saved.settings?.showStatusBar !== undefined &&
-    saved.showStatusBar === undefined
-  ) {
-    migrated.showStatusBar = saved.settings.showStatusBar;
-  }
-  delete migrated.settings;
-  delete migrated.snapshot;
-  return migrated as SavedData;
-}
 
 export default class ReviewPlugin extends Plugin {
   data!: PluginData;
@@ -171,13 +142,12 @@ export default class ReviewPlugin extends Plugin {
       new Notice(
         "Review: saved data is from a newer plugin version. Changes will not be saved until the plugin is updated.",
       );
-      this.data = { ...DEFAULT_DATA, ...saved, schemaVersion: savedVersion };
+      this.data = { ...normalizeData(saved), schemaVersion: savedVersion };
     } else {
       const migrated =
         saved && savedVersion < 2 ? migrateV1toV2(saved) : (saved ?? {});
       this.data = {
-        ...DEFAULT_DATA,
-        ...migrated,
+        ...normalizeData(migrated),
         schemaVersion: CURRENT_SCHEMA_VERSION,
       };
     }
