@@ -52,6 +52,17 @@ export default class ReviewPlugin extends Plugin {
   statusBar!: StatusBar;
 
   /**
+   * Why writing is refused, or null when it is allowed. Set on every path
+   * through loadSettings: data we failed to read must not be overwritten by
+   * the defaults we fell back to, and data from a newer plugin version must
+   * not be truncated to what this version understands.
+   */
+  private saveBlocked: string | null = null;
+
+  /** Tail of the serialized write queue. Never rejects. */
+  private savePending: Promise<void> = Promise.resolve();
+
+  /**
    * Fire-and-forget bridge for UI callbacks that cannot await: surfaces
    * rejections via Notice instead of letting them vanish.
    */
@@ -135,12 +146,15 @@ export default class ReviewPlugin extends Plugin {
 
   loadSettings = async () => {
     let saved: SavedData | null = null;
+    let loadFailed = false;
     try {
       saved = await this.loadData();
     } catch (err) {
-      console.error("[review] loadData failed; starting from defaults", err);
+      // Distinct from `saved === null`, which is also a fresh install.
+      loadFailed = true;
+      console.error("[review] loadData failed; running read-only", err);
       new Notice(
-        "Review: could not read saved data — starting from defaults. See console for details.",
+        "Review: could not read saved data. The plugin is read-only until Obsidian reloads it — your saved review will not be overwritten. See console for details.",
       );
     }
 
@@ -150,7 +164,7 @@ export default class ReviewPlugin extends Plugin {
 
     if (savedVersion > CURRENT_SCHEMA_VERSION) {
       // Data from a newer plugin version: load what we understand, but keep
-      // the newer schemaVersion so saveSettings refuses to overwrite it.
+      // the newer schemaVersion so the file is not truncated to v2 on write.
       console.warn(
         `[review] data has schema v${savedVersion}, newer than v${CURRENT_SCHEMA_VERSION}; loading read-only`,
       );
@@ -168,23 +182,56 @@ export default class ReviewPlugin extends Plugin {
       };
     }
 
+    // Assigned on every path, back to null included, so a reload after a
+    // transient read failure lifts the block.
+    if (loadFailed) {
+      this.saveBlocked = "saved data could not be read";
+    } else if (savedVersion > CURRENT_SCHEMA_VERSION) {
+      this.saveBlocked = "saved data is from a newer plugin version";
+    } else {
+      this.saveBlocked = null;
+    }
+
     this.state.load(this.data.reviewedPaths, this.data.reviewStartedAt);
   };
 
-  saveSettings = async () => {
-    if (this.data.schemaVersion > CURRENT_SCHEMA_VERSION) {
-      console.warn(
-        `[review] not saving: data has schema v${this.data.schemaVersion}, newer than v${CURRENT_SCHEMA_VERSION}`,
+  saveSettings = (): Promise<void> => {
+    if (this.saveBlocked) {
+      console.warn(`[review] not saving: ${this.saveBlocked}`);
+      new Notice(
+        `Review: ${this.saveBlocked}. Changes will not be saved until you reload.`,
       );
-      return;
+      return Promise.resolve();
     }
+
     this.data.reviewedPaths = [...this.state.reviewedPaths];
     this.data.reviewStartedAt = this.state.reviewStartedAt;
+
+    // Snapshot at call time, not write time: a queued write must carry the
+    // state that was current when it was requested, not whatever `this.data`
+    // holds by the time its turn comes.
+    const payload: PluginData = {
+      ...this.data,
+      reviewedPaths: [...this.data.reviewedPaths],
+      excludedFolders: [...this.data.excludedFolders],
+    };
+
+    // Serialize, so overlapping saves land in call order. Both arms run the
+    // write: a failed predecessor must not stop its successor.
+    const next = this.savePending.then(
+      () => this.writeSettings(payload),
+      () => this.writeSettings(payload),
+    );
+    this.savePending = next.catch(() => {});
+    return next;
+  };
+
+  private writeSettings = async (data: PluginData) => {
     try {
-      await this.saveData(this.data);
+      await this.saveData(data);
     } catch (err) {
       console.error(
-        `[review] saveData failed (${this.data.reviewedPaths.length} reviewed paths, ${this.data.excludedFolders.length} excluded folders)`,
+        `[review] saveData failed (${data.reviewedPaths.length} reviewed paths, ${data.excludedFolders.length} excluded folders)`,
         err,
       );
       throw err;
