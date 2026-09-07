@@ -113,22 +113,17 @@ describe("stats", () => {
     expect(state.stats(eligible)).toEqual({
       reviewed: 2,
       eligible: 4,
-      notReviewed: 2,
       percentCompleted: 50,
     });
   });
 
   test("handles zero eligible files", () => {
-    const stats = new ReviewState().stats([]);
-    expect(stats.percentCompleted).toBe(0);
-    expect(stats.notReviewed).toBe(0);
+    expect(new ReviewState().stats([]).percentCompleted).toBe(0);
   });
 
   test("handles fully reviewed", () => {
     const state = stateWith(["a.md"]);
-    const stats = state.stats(["a.md"]);
-    expect(stats.percentCompleted).toBe(100);
-    expect(stats.notReviewed).toBe(0);
+    expect(state.stats(["a.md"]).percentCompleted).toBe(100);
   });
 });
 
