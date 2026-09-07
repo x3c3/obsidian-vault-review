@@ -5,6 +5,7 @@
 ### Fixed
 
 - Review commands now distinguish "nothing eligible to review" from "nothing left to review" (#102)
+- The "Status bar" setting now actually hides the status bar. It toggled Obsidian's `is-hidden` class, whose rules are scoped to ribbon and stacked-tab elements and so styled nothing on a status-bar item.
 - Modals override `onClose` instead of shadowing it, so Obsidian's own cleanup still runs (#103)
 - Persisted data is validated before it becomes live state, and unreadable saved data is never overwritten (#94, #96)
 - Only mutations that were actually persisted are committed to in-memory state (#97)
