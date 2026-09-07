@@ -8,47 +8,11 @@ Obsidian plugin to randomly review vault notes and track progress.
 
 The current next step for this repo is tracked in the workspace backlog at `../NEXT.md` (the `obsidian-review` row). Read it when starting work; update it when that step ships.
 
-## Development Commands
-
-```bash
-bun install              # Install dependencies
-bun run dev              # Watch mode with auto-rebuild (no minification, sourcemaps)
-bun run build            # Production build (runs check first)
-bun run check            # Run all checks (typecheck + biome)
-bun run typecheck        # TypeScript type checking only
-bun run lint             # Biome lint + format check
-bun run lint:fix         # Auto-fix lint and format issues
-bun run format           # Format code with Biome
-bun run audit            # Check dependencies for critical vulnerabilities
-bun run deploy           # Copy build output to local Obsidian vault for testing
-bun run version          # Sync package.json version to manifest.json + versions.json
-bun test                 # Run tests
-bun test src/reviewState.test.ts -t "stats"   # Run a single test by name
-```
-
 ## Architecture
-
-### Build System
-
-- **Build script**: `build.ts` uses Bun's native bundler
-- **Entry point**: `src/main.ts`
-- **Output**: `./main.js` (CommonJS format, minified in production)
-- **Externals**: `obsidian` and `electron` are not bundled
 
 ### Data Model
 
 The plugin persists only the set of reviewed file paths plus excluded folders (via Obsidian's `loadData`/`saveData` into `data.json`). The vault itself is the source of truth for which files exist — so `ReviewState.renameFolder`/`renameFile` (rename) and `deleteFolder`/`deleteFile` (delete) reconcile the stored set against current vault state rather than maintaining an authoritative file list.
-
-### Modules
-
-- `src/main.ts` — Obsidian entrypoint; re-exports the plugin
-- `src/plugin.ts` — `ReviewPlugin` lifecycle: commands, persistence, migration, event wiring
-- `src/reviewState.ts` — `ReviewState` (the reviewed-set state machine, no Obsidian APIs) + `isExcluded`
-- `src/statusBar.ts` — status-bar UI
-- `src/settingsTab.ts` — settings UI
-- `src/modals.ts` — confirm-reset and review-menu modals
-- `src/folderSuggest.ts` — settings-tab folder autocomplete via Obsidian's `AbstractInputSuggest`
-- `src/__mocks__/` — Obsidian API stubs used by `bun test`
 
 ### Release Process
 
