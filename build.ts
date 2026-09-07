@@ -10,6 +10,9 @@ async function build() {
     external: ["obsidian", "electron"],
     minify: !isWatch,
     sourcemap: isWatch ? "linked" : "none",
+    // Default is `throw: true`, which rejects with an AggregateError and leaves
+    // the failure handling below unreachable — and kills the watcher.
+    throw: false,
   });
 
   if (!result.success) {
@@ -34,9 +37,9 @@ if (isWatch) {
     if (!filename?.endsWith(".ts")) return;
     if (filename.includes(".test.")) return;
     if (timeout) clearTimeout(timeout);
-    timeout = setTimeout(async () => {
+    timeout = setTimeout(() => {
       console.log(`\nRebuilding (${filename} changed)...`);
-      await build();
+      build().catch((err) => console.error("Rebuild failed", err));
     }, 100);
   });
 }
