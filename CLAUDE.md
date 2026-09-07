@@ -52,12 +52,7 @@ The plugin persists only the set of reviewed file paths plus excluded folders (v
 
 ### Release Process
 
-Tag and push to trigger `.github/workflows/` release automation:
-
-```bash
-git tag -a <version> -m "Release <version>"
-git push origin <version>
-```
+Use the `obsidian-release-gate` then `obsidian-release-ship` skills — do not tag by hand.
 
 Never hand-create GitHub releases — the workflow attaches `main.js`, `manifest.json`, and `styles.css` to the tag.
 
