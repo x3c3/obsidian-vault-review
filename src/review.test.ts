@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Review } from "./review";
+import { pickRandom, Review } from "./review";
 
 function reviewWith(
   paths: string[],
@@ -118,20 +118,16 @@ describe("reset", () => {
   });
 });
 
-describe("pickRandomUnreviewed", () => {
-  test("picks only from unreviewed files", () => {
-    const review = reviewWith(["a.md"]);
-    const eligible = ["a.md", "b.md", "c.md"];
-    expect(review.pickRandomUnreviewed(eligible, () => 0)).toBe("b.md");
-    expect(review.pickRandomUnreviewed(eligible, () => 0.99)).toBe("c.md");
+describe("pickRandom", () => {
+  test("picks by the injected rng", () => {
+    const items = ["a", "b", "c"];
+    expect(pickRandom(items, () => 0)).toBe("a");
+    expect(pickRandom(items, () => 0.5)).toBe("b");
+    expect(pickRandom(items, () => 0.99)).toBe("c");
   });
 
-  test("returns undefined when everything is reviewed", () => {
-    expect(reviewWith(["a.md"]).pickRandomUnreviewed(["a.md"])).toBeUndefined();
-  });
-
-  test("returns undefined for no eligible files", () => {
-    expect(new Review().pickRandomUnreviewed([])).toBeUndefined();
+  test("returns undefined for an empty list", () => {
+    expect(pickRandom([])).toBeUndefined();
   });
 });
 
